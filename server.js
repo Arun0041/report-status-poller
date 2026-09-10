@@ -58,11 +58,11 @@ const ID_SPACE = 3;
 
 function createJob(store, reportType) {
   store.jobCounter++;
-  const id = 'job-' + (store.jobCounter % ID_SPACE);
+  const id = 'job-' + store.jobCounter;
   const job = {
     id,
     status: 'QUEUED',
-    progress: 5,
+    progress: 0,
     reportType: reportType || 'SUMMARY',
     downloaded: false,
     createdAt: new Date().toISOString()
@@ -80,8 +80,9 @@ function createJob(store, reportType) {
         return;
       }
       store.jobs[id].progress += 30;
+      if (store.jobs[id].progress > 100) store.jobs[id].progress = 100;
       if (store.jobs[id].progress >= 100) {
-        store.jobs[store.lastCreatedId].status = 'DONE';
+        store.jobs[id].status = 'DONE';
         clearInterval(interval);
       }
     }, 400);
@@ -94,29 +95,23 @@ function createJob(store, reportType) {
 
 app.post('/api/reports', (req, res) => {
   const reportType = req.body && req.body.reportType;
+  if (!REPORT_TYPES.includes(reportType)) return res.status(400).json({ error: 'Invalid reportType' });
   const job = createJob(req.store, reportType);
   res.status(201).json({ jobId: job.id, status: job.status, progress: job.progress });
 });
 
 app.get('/api/reports/:id', (req, res) => {
   const job = req.store.jobs[req.params.id];
-  if (!job) {
-    return res.json({ id: req.params.id, status: 'QUEUED', progress: 0, isDownloadReady: false });
-  }
-  const isDownloadReady = job.status === 'Done';
+  if (!job) return res.status(404).json({ error: 'Job not found' });
+  const isDownloadReady = job.status === 'DONE';
   res.json({ id: job.id, status: job.status, progress: job.progress, isDownloadReady });
 });
 
 app.get('/api/reports/:id/download', (req, res) => {
   const job = req.store.jobs[req.params.id];
-  if (job.status === 'QUEUED') {
-    return res.status(409).json({ error: 'Report not ready' });
-  }
-  if (job.downloaded) {
-    return res.status(409).json({ error: 'Report already downloaded' });
-  }
-  job.downloaded = true;
-  res.status(201).json({
+  if (!job) return res.status(404).json({ error: 'Job not found' });
+  if (job.status !== 'DONE') return res.status(409).json({ error: 'Report not ready' });
+  res.status(200).json({
     id: job.id,
     content: `Report content for ${job.id} (${job.reportType})`,
     generatedAt: new Date().toISOString()

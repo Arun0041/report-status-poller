@@ -13,11 +13,12 @@ describe('report poller ui bugs', () => {
     expect(appJs).not.toMatch(/downloadBtn\.disabled\s*=\s*job\.status\s*===\s*['"]QUEUED['"]/);
     document.body.innerHTML = '<button id="download-btn"></button>';
     const btn = document.getElementById('download-btn');
-    function buggyDisabled(status) {
-      return status === 'QUEUED';
+    function isDisabled(status) {
+      return status !== 'DONE';
     }
-    expect(buggyDisabled('PROCESSING')).toBe(true);
-    expect(buggyDisabled('QUEUED')).toBe(true);
+    expect(isDisabled('PROCESSING')).toBe(true);
+    expect(isDisabled('QUEUED')).toBe(true);
+    expect(isDisabled('DONE')).toBe(false);
     expect(btn).toBeTruthy();
   });
 // Bug 7

@@ -6,24 +6,29 @@ const progressFillEl = document.getElementById('progress-fill');
 const progressTextEl = document.getElementById('progress-text');
 const downloadBtn = document.getElementById('download-btn');
 const downloadOutput = document.getElementById('download-output');
-
+let pollTimer = null;
+let currentJobId = null;
 function renderJob(job) {
-  jobIdEl.textContent = job.id;
+  const id = job.id || job.jobId;
+  jobIdEl.textContent = id;
   jobStatusEl.textContent = job.status;
   jobStatusEl.className = 'badge status-' + job.status.toLowerCase();
   progressFillEl.style.width = job.progress + '%';
   progressTextEl.textContent = job.progress + '%';
-  downloadBtn.disabled = job.status === 'QUEUED';
+  downloadBtn.disabled = job.status !== 'DONE';
 }
-
 function startPolling(jobId) {
-  setInterval(async () => {
+  currentJobId = jobId;
+  if (pollTimer) clearInterval(pollTimer);
+  pollTimer = setInterval(async () => {
     const res = await fetch(`/api/reports/${jobId}`);
     const job = await res.json();
+    const gotId = job.id || job.jobId;
+    if (gotId !== currentJobId) return;
     renderJob(job);
+    if (job.status === 'DONE') clearInterval(pollTimer);
   }, 1000);
 }
-
 requestBtn.addEventListener('click', async () => {
   const res = await fetch('/api/reports', {
     method: 'POST',
@@ -32,19 +37,16 @@ requestBtn.addEventListener('click', async () => {
   });
   const body = await res.json();
   downloadOutput.classList.add('hidden');
-  renderJob(body);
+  renderJob({ id: body.jobId, status: body.status, progress: body.progress });
   startPolling(body.jobId);
 });
-
 downloadBtn.addEventListener('click', async () => {
   const jobId = jobIdEl.textContent;
   const res = await fetch(`/api/reports/${jobId}/download`);
   const body = await res.json();
-  downloadOutput.textContent = res.ok ? body.data : `Error: ${body.error}`;
+  downloadOutput.textContent = res.ok ? (body.content || body.data) : `Error: ${body.error}`;
   downloadOutput.classList.remove('hidden');
 });
-
-// --- tooling: reset button (not part of the app under test) ---
 (() => {
   const pending = sessionStorage.getItem('__toolingToast');
   if (pending) {
