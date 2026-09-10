@@ -1,0 +1,108 @@
+const request = require('supertest');
+const { app, server } = require('../server');
+
+afterAll(async () => {
+  await request(app).post('/api/reset');
+  server.close();
+});
+
+beforeEach(async () => {
+  await request(app).post('/api/reset');
+});
+
+describe('API Bugs', () => {
+  test('1. wrong-persisted-default: newly created job should have progress 0', async () => {
+    const res = await request(app).post('/api/reports').send({ reportType: 'SUMMARY' });
+    expect(res.status).toBe(201);
+    expect(res.body.progress).toBe(0); // Fails because it's 5
+  });
+
+  test('2. missing-enum-validation: should reject invalid reportType', async () => {
+    const res = await request(app).post('/api/reports').send({ reportType: 'INVALID_TYPE' });
+    expect(res.status).toBe(400); // Fails because it returns 201
+  });
+
+  test('3. stale-or-mismatched-aggregate: job IDs should not cycle', async () => {
+    await request(app).post('/api/reports').send({ reportType: 'SUMMARY' }); // job-1
+    await request(app).post('/api/reports').send({ reportType: 'SUMMARY' }); // job-2
+    await request(app).post('/api/reports').send({ reportType: 'SUMMARY' }); // job-0 (bug)
+    const res = await request(app).post('/api/reports').send({ reportType: 'SUMMARY' });
+    expect(res.body.jobId).not.toBe('job-0');
+    expect(res.body.jobId).not.toBe('job-1');
+  });
+
+  test('4. state-not-persisted: progress should not be shared across jobs', async () => {
+    const res1 = await request(app).post('/api/reports').send({ reportType: 'SUMMARY' });
+    
+    // Wait for job 1 to progress
+    await new Promise(resolve => setTimeout(resolve, 1500));
+    
+    const res2 = await request(app).post('/api/reports').send({ reportType: 'SUMMARY' });
+    
+    // res2 should be a fresh job with QUEUED and progress 0
+    expect(res2.body.status).toBe('QUEUED');
+    
+    // Check state of res2 via GET
+    const getRes2 = await request(app).get(`/api/reports/${res2.body.jobId}`);
+    expect(getRes2.body.progress).toBeLessThan(100); // Fails because it copies job-1's 100+ progress
+  });
+
+  test('5. case-sensitivity-mismatch: isDownloadReady should be true when DONE', async () => {
+    const res = await request(app).post('/api/reports').send({ reportType: 'SUMMARY' });
+    const jobId = res.body.jobId;
+    
+    // Wait for job to finish
+    await new Promise(resolve => setTimeout(resolve, 3000));
+    
+    const getRes = await request(app).get(`/api/reports/${jobId}`);
+    expect(getRes.body.status).toBe('DONE');
+    expect(getRes.body.isDownloadReady).toBe(true); // Fails because it's false
+  });
+
+  test('6. off-by-one-boundary: progress should cap at 100', async () => {
+    const res = await request(app).post('/api/reports').send({ reportType: 'SUMMARY' });
+    const jobId = res.body.jobId;
+    
+    // Wait for job to finish and overshoot
+    await new Promise(resolve => setTimeout(resolve, 3500));
+    
+    const getRes = await request(app).get(`/api/reports/${jobId}`);
+    expect(getRes.body.status).toBe('DONE');
+    expect(getRes.body.progress).toBe(100); // Fails because it's 125
+  });
+
+  test('7. wrong-status-code: fake ID should return 404', async () => {
+    const res = await request(app).get('/api/reports/fake-job-id');
+    expect(res.status).toBe(404); // Fails because it returns 200
+  });
+
+  test('8. wrong-status-code: successful download should return 200', async () => {
+    const res = await request(app).post('/api/reports').send({ reportType: 'SUMMARY' });
+    const jobId = res.body.jobId;
+    
+    await new Promise(resolve => setTimeout(resolve, 3000)); // wait until DONE
+    
+    const dlRes = await request(app).get(`/api/reports/${jobId}/download`);
+    expect(dlRes.status).toBe(200); // Fails because it returns 201
+  });
+
+  test('9. missing-reference-or-state-check: download should be repeatable', async () => {
+    const res = await request(app).post('/api/reports').send({ reportType: 'SUMMARY' });
+    const jobId = res.body.jobId;
+    
+    await new Promise(resolve => setTimeout(resolve, 3000)); // wait until DONE
+    
+    await request(app).get(`/api/reports/${jobId}/download`); // first download
+    const dlRes2 = await request(app).get(`/api/reports/${jobId}/download`); // second download
+    
+    expect(dlRes2.status).toBe(200); // Fails because it returns 409
+  });
+
+  test('10. wrong-filter-boolean-logic: download while QUEUED should return 409, not 500', async () => {
+    const res = await request(app).post('/api/reports').send({ reportType: 'SUMMARY' });
+    const jobId = res.body.jobId;
+    
+    const dlRes = await request(app).get(`/api/reports/${jobId}/download`);
+    expect(dlRes.status).toBe(409); // Fails because it returns 500
+  });
+});
